@@ -25,7 +25,7 @@ const activeRooms = new Map<string, Room>();
 async function startServer() {
   const app = express();
   const server = http.createServer(app);
-  const PORT = 3000;
+  const PORT = process.env.PORT ? parseInt(process.env.PORT, 10) : 3000;
 
   // Socket.IO configuration with CORS enabled for standard development environments
   const io = new Server(server, {
@@ -42,6 +42,20 @@ async function startServer() {
     res.json({ status: "ok", activeRoomsCount: activeRooms.size });
   });
 
+  app.get("/api/rooms", (req, res) => {
+    const roomsList = Array.from(activeRooms.values()).map(room => ({
+      roomId: room.roomId,
+      usersCount: room.users.size,
+      users: Array.from(room.users.values()).map(u => ({
+        username: u.username,
+        avatarUrl: u.avatarUrl,
+        isHost: u.isHost,
+      })),
+      hasPassword: !!room.password,
+    }));
+    res.json(roomsList);
+  });
+
   app.get("/api/rooms/:roomId", (req, res) => {
     const { roomId } = req.params;
     const room = activeRooms.get(roomId);
@@ -55,9 +69,56 @@ async function startServer() {
     res.json({ roomId, usersCount: room.users.size, users: usersList });
   });
 
+  // Helper to broadcast active rooms list to anyone in the lobby
+  function broadcastRoomsUpdate() {
+    const roomsList = Array.from(activeRooms.values()).map(room => ({
+      roomId: room.roomId,
+      usersCount: room.users.size,
+      users: Array.from(room.users.values()).map(u => ({
+        username: u.username,
+        avatarUrl: u.avatarUrl,
+        isHost: u.isHost,
+      })),
+      hasPassword: !!room.password,
+    }));
+    io.to("lobby").emit("lobby-rooms-update", roomsList);
+  }
+
   // Socket.IO Room & WebRTC Signaling Logic
   io.on("connection", (socket: Socket) => {
     let currentRoomId: string | null = null;
+
+    // Lobby Socket Listeners
+    socket.on("join-lobby", () => {
+      socket.join("lobby");
+      // Send active rooms list immediately
+      const roomsList = Array.from(activeRooms.values()).map(room => ({
+        roomId: room.roomId,
+        usersCount: room.users.size,
+        users: Array.from(room.users.values()).map(u => ({
+          username: u.username,
+          avatarUrl: u.avatarUrl,
+          isHost: u.isHost,
+        })),
+        hasPassword: !!room.password,
+      }));
+      socket.emit("lobby-rooms-update", roomsList);
+    });
+
+    socket.on("leave-lobby", () => {
+      socket.leave("lobby");
+    });
+
+    socket.on("send-lobby-chat", ({ username, text, avatarUrl }) => {
+      const chatMsg = {
+        id: `lobby-msg-${Date.now()}-${Math.random()}`,
+        username,
+        text,
+        avatarUrl,
+        timestamp: Date.now(),
+      };
+      io.to("lobby").emit("lobby-chat-message", chatMsg);
+    });
 
     socket.on("join-room", ({ roomId, username, password, isMuted = false, isHandRaised = false, avatarUrl }) => {
       try {
@@ -65,6 +126,8 @@ async function startServer() {
           socket.emit("error-message", "Room ID and username are required.");
           return;
         }
+
+        const isNewRoom = !activeRooms.has(roomId);
 
         // Retrieve or initialize the room
         let room = activeRooms.get(roomId);
@@ -146,6 +209,20 @@ async function startServer() {
         io.to(roomId).emit("chat-message", systemMessage);
 
         console.log(`[Socket] User ${username} (${socket.id}) joined room ${roomId}. Host: ${isHost}`);
+        
+        // Broadcast rooms list update to the lobby
+        broadcastRoomsUpdate();
+
+        // If newly created room, broadcast live alert to lobby
+        if (isNewRoom) {
+          io.to("lobby").emit("lobby-announcement", {
+            id: `announce-${Date.now()}-${Math.random()}`,
+            username,
+            roomId,
+            avatarUrl,
+            timestamp: Date.now(),
+          });
+        }
       } catch (err) {
         console.error("Error in join-room handler:", err);
         socket.emit("error-message", "An error occurred while joining the room.");
@@ -379,6 +456,7 @@ async function startServer() {
       if (room.users.size === 0) {
         activeRooms.delete(rId);
         console.log(`[Socket] Room ${rId} is now empty and has been removed.`);
+        broadcastRoomsUpdate();
         return;
       }
 
@@ -405,6 +483,8 @@ async function startServer() {
           console.log(`[Socket] Host changed to ${newHost.username} in room ${rId}.`);
         }
       }
+
+      broadcastRoomsUpdate();
     }
   });
 

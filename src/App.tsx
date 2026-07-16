@@ -51,6 +51,7 @@ export default function App() {
   const [roomId, setRoomId] = useState("");
   const [isHost, setIsHost] = useState(false);
   const [myId, setMyId] = useState("");
+  const [isSocketConnected, setIsSocketConnected] = useState(false);
 
   const t = translations[language];
 
@@ -176,7 +177,7 @@ export default function App() {
       });
 
       // 4. Configure Socket listeners
-      setupSocketListeners(socket, localStream);
+      setupSocketListeners(socket, localStream, userNickname, avatarUrl || "");
       setInRoom(true);
 
     } catch (err: any) {
@@ -186,8 +187,16 @@ export default function App() {
   };
 
   // Configure Socket.IO event listeners
-  const setupSocketListeners = (socket: Socket, localStream: MediaStream) => {
+  const setupSocketListeners = (socket: Socket, localStream: MediaStream, nickname: string, avatar: string) => {
     
+    socket.on("connect", () => {
+      setIsSocketConnected(true);
+    });
+
+    socket.on("disconnect", () => {
+      setIsSocketConnected(false);
+    });
+
     // Server requests room password
     socket.on("password-required", ({ roomId, username }) => {
       cleanupConnections();
@@ -208,6 +217,7 @@ export default function App() {
     socket.on("room-joined", ({ users, isHost: hostStatus, myId: assignedId }) => {
       setMyId(assignedId);
       setIsHost(hostStatus);
+      setIsSocketConnected(true);
       
       // Seed initial participants list
       const initialParticipants = users.map((u: any) => ({
@@ -229,13 +239,13 @@ export default function App() {
       const welcomeSelf: ChatMessage = {
         id: `welcome-self-${Date.now()}`,
         socketId: "system",
-        username: username,
+        username: nickname,
         text: `joined the room. Welcome!`,
         textBn: `রুমে যোগদান করেছে। তাকে স্বাগত!`,
         timestamp: Date.now(),
         type: "system",
         subtype: "welcome",
-        avatarUrl: myAvatarUrl,
+        avatarUrl: avatar,
       };
       setChatMessages((prev) => [...prev, welcomeSelf]);
     });
@@ -771,6 +781,7 @@ export default function App() {
     }
 
     // 5. Reset states
+    setIsSocketConnected(false);
     setPeerStreams({});
     setParticipants([]);
     setChatMessages([]);
@@ -878,7 +889,7 @@ export default function App() {
                   </span>
                 </h2>
                 <div className="flex items-center gap-1">
-                  <span className="w-1.5 h-1.5 bg-brand-highlight rounded-full animate-ping"></span>
+                  <span className={`w-1.5 h-1.5 rounded-full animate-pulse ${isSocketConnected ? "bg-emerald-400" : "bg-rose-500"}`}></span>
                   <span className="text-[10px] text-brand-light font-semibold font-sans">
                     {t.roomCode}: <span className="font-mono font-bold text-brand-highlight">{roomId}</span>
                   </span>
@@ -1072,9 +1083,11 @@ export default function App() {
                       </span>
                     )}
                   </div>
-                  <span className="text-[9px] text-brand-light/50 font-bold flex items-center gap-1">
-                    <span className="w-1.5 h-1.5 rounded-full bg-brand-highlight animate-pulse"></span>
-                    {language === "en" ? "Real-time" : "রিয়েল-টাইম"}
+                  <span className={`text-[9px] font-bold flex items-center gap-1 ${isSocketConnected ? "text-emerald-400" : "text-rose-400 animate-pulse"}`}>
+                    <span className={`w-1.5 h-1.5 rounded-full ${isSocketConnected ? "bg-emerald-400" : "bg-rose-500"}`}></span>
+                    {language === "en" 
+                      ? (isSocketConnected ? "Connected" : "Connecting...") 
+                      : (isSocketConnected ? "সংযুক্ত" : "সংযোগ হচ্ছে...")}
                   </span>
                 </div>
 
