@@ -3,6 +3,11 @@ import http from "http";
 import path from "path";
 import { Server, Socket } from "socket.io";
 import { createServer as createViteServer } from "vite";
+import { GoogleGenAI } from "@google/genai";
+import dotenv from "dotenv";
+
+dotenv.config();
+const ai = new GoogleGenAI({ apiKey: process.env.GEMINI_API_KEY || "" });
 
 interface User {
   socketId: string;
@@ -24,6 +29,8 @@ const activeRooms = new Map<string, Room>();
 
 async function startServer() {
   const app = express();
+  app.use(express.json({ limit: "15mb" }));
+  app.use(express.urlencoded({ limit: "15mb", extended: true }));
   const server = http.createServer(app);
   const PORT = process.env.PORT ? parseInt(process.env.PORT, 10) : 3000;
 
@@ -40,6 +47,156 @@ async function startServer() {
   // REST API Endpoints
   app.get("/api/health", (req, res) => {
     res.json({ status: "ok", activeRoomsCount: activeRooms.size });
+  });
+
+  // Google Search Grounding with gemini-3.5-flash
+  app.post("/api/ai/search", async (req, res) => {
+    try {
+      const { query } = req.body;
+      if (!query) {
+        return res.status(400).json({ error: "Query is required" });
+      }
+
+      const interaction = await ai.interactions.create({
+        model: "gemini-3.5-flash",
+        input: query,
+        tools: [{ type: "google_search" }],
+      });
+
+      let fullOutput = "";
+      for (const step of interaction.steps) {
+        if (step.type === "model_output") {
+          const textContent: any = step.content?.find((c: any) => c.type === "text");
+          if (textContent && textContent.text) {
+            fullOutput += textContent.text;
+          }
+        }
+      }
+
+      res.json({ text: fullOutput });
+    } catch (err: any) {
+      console.error("AI Search Grounding error:", err);
+      res.status(500).json({ error: err.message || "Search grounding failed" });
+    }
+  });
+
+  // Create and Edit Images using gemini-3.1-flash-image
+  app.post("/api/ai/generate-image", async (req, res) => {
+    try {
+      const { prompt, image } = req.body; // image can be a base64 string
+      if (!prompt) {
+        return res.status(400).json({ error: "Prompt is required" });
+      }
+
+      let interaction;
+      if (image) {
+        // Edit image
+        // Base64 needs to strip headers if present (e.g. data:image/png;base64,...)
+        let base64Data = image;
+        let mimeType = "image/png";
+        if (image.includes(";base64,")) {
+          const parts = image.split(";base64,");
+          mimeType = parts[0].replace("data:", "");
+          base64Data = parts[1];
+        }
+
+        interaction = await ai.interactions.create({
+          model: "gemini-3.1-flash-image",
+          input: [
+            {
+              type: "image",
+              data: base64Data,
+              mime_type: mimeType,
+            },
+            {
+              type: "text",
+              text: prompt,
+            },
+          ],
+          response_modalities: ["image", "text"],
+        });
+      } else {
+        // Create new image
+        interaction = await ai.interactions.create({
+          model: "gemini-3.1-flash-image",
+          input: prompt,
+          response_modalities: ["image", "text"],
+          generation_config: {
+            image_config: {
+              aspect_ratio: "1:1",
+              image_size: "1K",
+            },
+          },
+        });
+      }
+
+      let generatedImageUrl = "";
+      for (const step of interaction.steps) {
+        if (step.type === "model_output") {
+          const imageContent = step.content?.find((c: any) => c.type === "image");
+          if (imageContent && imageContent.data) {
+            const mimeType = imageContent.mime_type || "image/png";
+            generatedImageUrl = `data:${mimeType};base64,${imageContent.data}`;
+            break;
+          }
+        }
+      }
+
+      if (!generatedImageUrl) {
+        return res.status(500).json({ error: "No image was generated" });
+      }
+
+      res.json({ imageUrl: generatedImageUrl });
+    } catch (err: any) {
+      console.error("Image generation error:", err);
+      res.status(500).json({ error: err.message || "Image generation failed" });
+    }
+  });
+
+  // Generate Music using lyria-3-clip-preview / lyria-3-pro-preview
+  app.post("/api/ai/generate-music", async (req, res) => {
+    try {
+      const { prompt, isPro } = req.body;
+      if (!prompt) {
+        return res.status(400).json({ error: "Prompt is required" });
+      }
+
+      const model = isPro ? "lyria-3-pro-preview" : "lyria-3-clip-preview";
+      const responseStream = await ai.models.generateContentStream({
+        model,
+        contents: prompt,
+      });
+
+      let audioBase64 = "";
+      let lyrics = "";
+      let mimeType = "audio/wav";
+
+      for await (const chunk of responseStream) {
+        const parts = chunk.candidates?.[0]?.content?.parts;
+        if (!parts) continue;
+
+        for (const part of parts) {
+          if (part.inlineData?.data) {
+            if (!audioBase64 && part.inlineData.mimeType) {
+              mimeType = part.inlineData.mimeType;
+            }
+            audioBase64 += part.inlineData.data;
+          }
+          if (part.text && !lyrics) {
+            lyrics = part.text;
+          }
+        }
+      }
+
+      if (!audioBase64) {
+        return res.status(500).json({ error: "No music audio was generated" });
+      }
+
+      res.json({ audioBase64, lyrics, mimeType });
+    } catch (err: any) {
+      console.error("Music generation error:", err);
+      res.status(500).json({ error: err.message || "Music generation failed" });
+    }
   });
 
   app.get("/api/rooms", (req, res) => {
@@ -120,7 +277,7 @@ async function startServer() {
       io.to("lobby").emit("lobby-chat-message", chatMsg);
     });
 
-    socket.on("join-room", ({ roomId, username, password, isMuted = false, isHandRaised = false, avatarUrl }) => {
+    socket.on("join-room", ({ roomId, username, password, bypass, isMuted = false, isHandRaised = false, avatarUrl }) => {
       try {
         if (!roomId || !username) {
           socket.emit("error-message", "Room ID and username are required.");
@@ -132,8 +289,8 @@ async function startServer() {
         // Retrieve or initialize the room
         let room = activeRooms.get(roomId);
         if (room) {
-          // Room exists, check password if it has one
-          if (room.password) {
+          // Room exists, check password if it has one and we are NOT bypassing
+          if (room.password && !bypass) {
             if (!password) {
               socket.emit("password-required", { roomId, username });
               return;

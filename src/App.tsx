@@ -74,6 +74,9 @@ export default function App() {
   // Active speaking tracking
   const [activeSpeakers, setActiveSpeakers] = useState<Set<string>>(new Set());
 
+  // Room notifications for user joins
+  const [roomNotifications, setRoomNotifications] = useState<any[]>([]);
+
   // Password prompt & recording states
   const [passwordRequiredData, setPasswordRequiredData] = useState<{ roomId: string; username: string } | null>(null);
   const [passwordError, setPasswordError] = useState<string | null>(null);
@@ -140,7 +143,7 @@ export default function App() {
   };
 
   // Connect to room (Signal server and establish WebRTC mesh)
-  const handleJoinRoom = async (userNickname: string, selectedRoomId: string, password?: string, avatarUrl?: string) => {
+  const handleJoinRoom = async (userNickname: string, selectedRoomId: string, password?: string, avatarUrl?: string, bypass?: boolean) => {
     try {
       setUsername(userNickname);
       setRoomId(selectedRoomId);
@@ -166,11 +169,16 @@ export default function App() {
       const socket = io(socketUrl);
       socketRef.current = socket;
 
+      // Check bypass in URL query if not passed explicitly
+      const queryBypass = new URLSearchParams(window.location.search).get("bypass") === "true";
+      const isBypass = bypass !== undefined ? bypass : queryBypass;
+
       // 3. Emit Join Event
       socket.emit("join-room", {
         roomId: selectedRoomId,
         username: userNickname,
         password,
+        bypass: isBypass,
         isMuted,
         isHandRaised,
         avatarUrl,
@@ -248,6 +256,21 @@ export default function App() {
         avatarUrl: avatar,
       };
       setChatMessages((prev) => [...prev, welcomeSelf]);
+
+      // Float/toast notification for self
+      const selfNotifId = `room-join-self-${Date.now()}`;
+      setRoomNotifications((prev) => [
+        ...prev,
+        {
+          id: selfNotifId,
+          username: nickname,
+          avatarUrl: avatar,
+          timestamp: Date.now(),
+        }
+      ]);
+      setTimeout(() => {
+        setRoomNotifications((prev) => prev.filter((n) => n.id !== selfNotifId));
+      }, 6000);
     });
 
     // Handle incoming participant joining
@@ -271,6 +294,21 @@ export default function App() {
         avatarUrl: newUser.avatarUrl,
       };
       setChatMessages((prev) => [...prev, welcomeOther]);
+
+      // Float/toast notification for others joining
+      const otherNotifId = `room-join-other-${newUser.socketId}-${Date.now()}`;
+      setRoomNotifications((prev) => [
+        ...prev,
+        {
+          id: otherNotifId,
+          username: newUser.username,
+          avatarUrl: newUser.avatarUrl,
+          timestamp: Date.now(),
+        }
+      ]);
+      setTimeout(() => {
+        setRoomNotifications((prev) => prev.filter((n) => n.id !== otherNotifId));
+      }, 6000);
     });
 
     // Handle signaling: SDP offers & answers
@@ -655,7 +693,7 @@ export default function App() {
   // Copy meeting link to clipboard
   const handleCopyLink = () => {
     // Generate joining URL
-    const url = `${window.location.origin}/?room=${roomId}`;
+    const url = `${window.location.origin}/?room=${roomId}&bypass=true`;
     navigator.clipboard.writeText(url)
       .then(() => {
         setCopied(true);
@@ -872,7 +910,40 @@ export default function App() {
         />
       ) : (
         /* RENDER VOICE CHAT ROOM */
-        <div className="flex flex-col h-full w-full overflow-hidden">
+        <div className="flex flex-col h-full w-full overflow-hidden relative">
+          
+          {/* Welcome floating cards overlay */}
+          <div className="fixed top-16 right-4 z-50 flex flex-col gap-2 max-w-sm w-full pointer-events-none">
+            {roomNotifications.map((notif) => (
+              <div
+                key={notif.id}
+                className="pointer-events-auto bg-slate-950/95 border-2 border-brand-highlight rounded-2xl p-4 shadow-[0_0_25px_rgba(102,252,241,0.35)] flex items-center gap-3 animate-slideInRight hover:border-white transition-all transform hover:scale-[1.02]"
+              >
+                <div className="w-10 h-10 rounded-full bg-slate-900 border border-brand-highlight overflow-hidden shrink-0 flex items-center justify-center">
+                  {notif.avatarUrl ? (
+                    <img src={notif.avatarUrl} alt={notif.username} className="w-full h-full object-cover" referrerPolicy="no-referrer" />
+                  ) : (
+                    <div className="w-full h-full bg-slate-800 text-brand-light flex items-center justify-center font-bold text-xs uppercase">
+                      {notif.username.slice(0, 2)}
+                    </div>
+                  )}
+                </div>
+                <div className="flex-1 min-w-0">
+                  <span className="flex items-center gap-1.5 text-[10px] text-amber-400 font-extrabold uppercase tracking-wider">
+                    <span className="w-2 h-2 bg-emerald-500 rounded-full animate-ping"></span>
+                    {language === "en" ? "WELCOME 🎤" : "স্বাগতম 🎤"}
+                  </span>
+                  <p className="text-xs text-white font-bold leading-normal truncate mt-0.5 font-sans">
+                    <span className="text-brand-highlight font-sans">{notif.username}</span>{" "}
+                    {language === "en" ? "joined the Adda!" : "আড্ডায় যোগ দিয়েছেন!"}
+                  </p>
+                  <p className="text-[10px] text-brand-light font-medium truncate mt-0.5 font-sans">
+                    {language === "en" ? "Let's welcome them!" : "সবাই মিলে তাকে স্বাগতম জানাই!"}
+                  </p>
+                </div>
+              </div>
+            ))}
+          </div>
           
           {/* Room Header */}
           <header className="bg-brand-panel border-b border-slate-700 py-3.5 px-4 md:px-6 flex flex-wrap gap-4 justify-between items-center z-10 shrink-0">
