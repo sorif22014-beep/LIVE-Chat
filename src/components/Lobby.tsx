@@ -1,10 +1,10 @@
 import React, { useState, useEffect, useRef } from "react";
-import { Mic, MicOff, Globe, Sparkles, LogIn, PlusCircle, Volume2, Shield, Lock } from "lucide-react";
+import { Mic, MicOff, Globe, Sparkles, LogIn, PlusCircle, Volume2, Shield, Lock, Camera } from "lucide-react";
 import { Language, translations } from "../types";
 
 interface LobbyProps {
   initialRoomId?: string;
-  onJoin: (username: string, roomId: string, password?: string) => void;
+  onJoin: (username: string, roomId: string, password?: string, avatarUrl?: string) => void;
   language: Language;
   onLanguageChange: (lang: Language) => void;
 }
@@ -19,7 +19,10 @@ export const Lobby: React.FC<LobbyProps> = ({
   const [roomId, setRoomId] = useState(initialRoomId);
   const [isCreateMode, setIsCreateMode] = useState(!initialRoomId);
   const [password, setPassword] = useState("");
+  const [avatarUrl, setAvatarUrl] = useState("");
   const [error, setError] = useState<string | null>(null);
+
+  const fileInputRef = useRef<HTMLInputElement>(null);
 
   // Microhpone test meter states
   const [hasMicPermission, setHasMicPermission] = useState<boolean | null>(null);
@@ -122,7 +125,7 @@ export const Lobby: React.FC<LobbyProps> = ({
     }
 
     // Pass up to parent
-    onJoin(username.trim(), roomId.trim().toLowerCase(), password.trim() || undefined);
+    onJoin(username.trim(), roomId.trim().toLowerCase(), password.trim() || undefined, avatarUrl || undefined);
   };
 
   return (
@@ -205,6 +208,60 @@ export const Lobby: React.FC<LobbyProps> = ({
           </div>
 
           <form onSubmit={handleSubmit} className="space-y-4">
+            {/* Direct Profile Photo Upload Section */}
+            <div className="flex flex-col items-center justify-center pb-3 border-b border-slate-700/40 mb-4">
+              <label className="block text-xs font-bold text-brand-light uppercase tracking-wider mb-2 text-center w-full">
+                {language === "en" ? "Profile Picture" : "প্রোফাইল ছবি (সরাসরি বসান)"}
+              </label>
+              <div
+                onClick={() => fileInputRef.current?.click()}
+                className="group relative w-16 h-16 md:w-20 md:h-20 rounded-full border-2 border-dashed border-slate-600 hover:border-brand-accent bg-brand-dark/40 flex items-center justify-center cursor-pointer overflow-hidden transition-all shadow-inner"
+              >
+                {avatarUrl ? (
+                  <img src={avatarUrl} alt="Avatar Preview" className="w-full h-full object-cover" referrerPolicy="no-referrer" />
+                ) : (
+                  <div className="flex flex-col items-center justify-center text-slate-500 group-hover:text-brand-accent transition-colors">
+                    <Camera className="w-5 h-5 md:w-6 md:h-6" />
+                    <span className="text-[8px] md:text-[10px] font-bold uppercase mt-1">
+                      {language === "en" ? "Upload" : "ছবি দিন"}
+                    </span>
+                  </div>
+                )}
+                {avatarUrl && (
+                  <div className="absolute inset-0 bg-black/50 opacity-0 group-hover:opacity-100 flex items-center justify-center transition-opacity">
+                    <Camera className="w-4 h-4 md:w-5 md:h-5 text-white" />
+                  </div>
+                )}
+              </div>
+              <input
+                type="file"
+                ref={fileInputRef}
+                onChange={(e) => {
+                  const file = e.target.files?.[0];
+                  if (file) {
+                    const reader = new FileReader();
+                    reader.onloadend = () => {
+                      if (typeof reader.result === "string") {
+                        setAvatarUrl(reader.result);
+                      }
+                    };
+                    reader.readAsDataURL(file);
+                  }
+                }}
+                accept="image/*"
+                className="hidden"
+              />
+              {avatarUrl && (
+                <button
+                  type="button"
+                  onClick={() => setAvatarUrl("")}
+                  className="text-[9px] md:text-xs text-rose-400 font-bold mt-1.5 hover:underline"
+                >
+                  {language === "en" ? "Remove photo" : "ছবি মুছুন"}
+                </button>
+              )}
+            </div>
+
             {/* Nickname Input */}
             <div>
               <label className="block text-xs font-bold text-brand-light uppercase tracking-wider mb-2">

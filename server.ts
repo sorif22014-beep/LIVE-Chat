@@ -11,6 +11,7 @@ interface User {
   isHandRaised: boolean;
   isHost: boolean;
   joinedAt: number;
+  avatarUrl?: string;
 }
 
 interface Room {
@@ -58,7 +59,7 @@ async function startServer() {
   io.on("connection", (socket: Socket) => {
     let currentRoomId: string | null = null;
 
-    socket.on("join-room", ({ roomId, username, password, isMuted = false, isHandRaised = false }) => {
+    socket.on("join-room", ({ roomId, username, password, isMuted = false, isHandRaised = false, avatarUrl }) => {
       try {
         if (!roomId || !username) {
           socket.emit("error-message", "Room ID and username are required.");
@@ -98,6 +99,7 @@ async function startServer() {
           isHandRaised,
           isHost,
           joinedAt: Date.now(),
+          avatarUrl: avatarUrl || undefined,
         };
 
         room.users.set(socket.id, newUser);
@@ -111,6 +113,7 @@ async function startServer() {
             isMuted: u.isMuted,
             isHandRaised: u.isHandRaised,
             isHost: u.isHost,
+            avatarUrl: u.avatarUrl,
           }));
 
         // Send confirmation to the joining user
@@ -127,6 +130,7 @@ async function startServer() {
           isMuted,
           isHandRaised,
           isHost,
+          avatarUrl,
         });
 
         // System notification message
@@ -199,6 +203,21 @@ async function startServer() {
       }
     });
 
+    socket.on("update-avatar", ({ avatarUrl }) => {
+      if (!currentRoomId) return;
+      const room = activeRooms.get(currentRoomId);
+      if (!room) return;
+
+      const user = room.users.get(socket.id);
+      if (user) {
+        user.avatarUrl = avatarUrl;
+        io.to(currentRoomId).emit("user-state-changed", {
+          socketId: socket.id,
+          avatarUrl,
+        });
+      }
+    });
+
     // Text Chat messaging within the active room
     socket.on("send-chat", ({ text }) => {
       if (!currentRoomId) return;
@@ -215,6 +234,7 @@ async function startServer() {
         text,
         timestamp: Date.now(),
         type: "user",
+        avatarUrl: user.avatarUrl,
       };
 
       io.to(currentRoomId).emit("chat-message", chatMsg);

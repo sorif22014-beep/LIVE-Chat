@@ -18,7 +18,9 @@ import {
   Smile,
   Crown,
   Lock,
-  Disc
+  Disc,
+  PlusCircle,
+  X
 } from "lucide-react";
 import { Participant, ChatMessage, Language, translations } from "./types";
 import { Lobby } from "./components/Lobby";
@@ -45,6 +47,7 @@ export default function App() {
   const [language, setLanguage] = useState<Language>("bn");
   const [inRoom, setInRoom] = useState(false);
   const [username, setUsername] = useState("");
+  const [myAvatarUrl, setMyAvatarUrl] = useState("");
   const [roomId, setRoomId] = useState("");
   const [isHost, setIsHost] = useState(false);
   const [myId, setMyId] = useState("");
@@ -53,6 +56,8 @@ export default function App() {
 
   // Room participants list
   const [participants, setParticipants] = useState<Participant[]>([]);
+  // Mobile responsive grid seats layout
+  const [maxSeats, setMaxSeats] = useState(5);
   // Local microphone status
   const [isMuted, setIsMuted] = useState(false);
   const [isHandRaised, setIsHandRaised] = useState(false);
@@ -61,6 +66,7 @@ export default function App() {
   const [chatInput, setChatInput] = useState("");
   const [chatMessages, setChatMessages] = useState<ChatMessage[]>([]);
   const [activeTab, setActiveTab] = useState<"chat" | "participants">("chat");
+  const [showParticipantsModal, setShowParticipantsModal] = useState(false);
   const [copied, setCopied] = useState(false);
   const [errorMsg, setErrorMsg] = useState<string | null>(null);
 
@@ -104,6 +110,14 @@ export default function App() {
   useEffect(() => {
     if (chatEndRef.current) {
       chatEndRef.current.scrollIntoView({ behavior: "smooth" });
+      
+      // Secondary fallback to absolutely guarantee scroll-to-bottom on all viewports
+      const container = chatEndRef.current.parentElement;
+      if (container) {
+        setTimeout(() => {
+          container.scrollTop = container.scrollHeight;
+        }, 100);
+      }
     }
   }, [chatMessages]);
 
@@ -125,10 +139,13 @@ export default function App() {
   };
 
   // Connect to room (Signal server and establish WebRTC mesh)
-  const handleJoinRoom = async (userNickname: string, selectedRoomId: string, password?: string) => {
+  const handleJoinRoom = async (userNickname: string, selectedRoomId: string, password?: string, avatarUrl?: string) => {
     try {
       setUsername(userNickname);
       setRoomId(selectedRoomId);
+      if (avatarUrl) {
+        setMyAvatarUrl(avatarUrl);
+      }
       setErrorMsg(null);
       setPasswordRequiredData(null); // Clear previous prompt if successfully retrying
 
@@ -155,6 +172,7 @@ export default function App() {
         password,
         isMuted,
         isHandRaised,
+        avatarUrl,
       });
 
       // 4. Configure Socket listeners
@@ -198,6 +216,7 @@ export default function App() {
         isMuted: u.isMuted,
         isHandRaised: u.isHandRaised,
         isHost: u.isHost,
+        avatarUrl: u.avatarUrl,
       }));
       setParticipants(initialParticipants);
 
@@ -205,6 +224,20 @@ export default function App() {
       initialParticipants.forEach((peer: Participant) => {
         initiatePeerConnection(peer.socketId, localStream, socket);
       });
+
+      // Show welcome message for ourselves!
+      const welcomeSelf: ChatMessage = {
+        id: `welcome-self-${Date.now()}`,
+        socketId: "system",
+        username: username,
+        text: `joined the room. Welcome!`,
+        textBn: `রুমে যোগদান করেছে। তাকে স্বাগত!`,
+        timestamp: Date.now(),
+        type: "system",
+        subtype: "welcome",
+        avatarUrl: myAvatarUrl,
+      };
+      setChatMessages((prev) => [...prev, welcomeSelf]);
     });
 
     // Handle incoming participant joining
@@ -214,7 +247,20 @@ export default function App() {
         if (prev.some((p) => p.socketId === newUser.socketId)) return prev;
         return [...prev, newUser];
       });
-      // Existing clients sit back and wait for the new client to offer SDP
+
+      // Show welcome message for other joining user!
+      const welcomeOther: ChatMessage = {
+        id: `welcome-${newUser.socketId}-${Date.now()}`,
+        socketId: "system",
+        username: newUser.username,
+        text: `joined the room. Welcome!`,
+        textBn: `রুমে যোগদান করেছে। তাকে স্বাগত!`,
+        timestamp: Date.now(),
+        type: "system",
+        subtype: "welcome",
+        avatarUrl: newUser.avatarUrl,
+      };
+      setChatMessages((prev) => [...prev, welcomeOther]);
     });
 
     // Handle signaling: SDP offers & answers
@@ -257,8 +303,8 @@ export default function App() {
       }
     });
 
-    // Handle remote state updates (mute, raise hand)
-    socket.on("user-state-changed", ({ socketId, isMuted: peerMuted, isHandRaised: peerHand }) => {
+    // Handle remote state updates (mute, raise hand, avatar change)
+    socket.on("user-state-changed", ({ socketId, isMuted: peerMuted, isHandRaised: peerHand, avatarUrl: peerAvatar }) => {
       setParticipants((prev) =>
         prev.map((p) => {
           if (p.socketId === socketId) {
@@ -266,6 +312,7 @@ export default function App() {
               ...p,
               isMuted: peerMuted !== undefined ? peerMuted : p.isMuted,
               isHandRaised: peerHand !== undefined ? peerHand : p.isHandRaised,
+              avatarUrl: peerAvatar !== undefined ? peerAvatar : p.avatarUrl,
             };
           }
           return p;
@@ -636,6 +683,14 @@ export default function App() {
     }
   };
 
+  // Update local avatar picture inside active conversation
+  const handleUpdateAvatar = (newAvatarUrl: string) => {
+    setMyAvatarUrl(newAvatarUrl);
+    if (socketRef.current) {
+      socketRef.current.emit("update-avatar", { avatarUrl: newAvatarUrl });
+    }
+  };
+
   // Send textual message
   const handleSendChat = (e?: React.FormEvent) => {
     if (e) e.preventDefault();
@@ -725,7 +780,7 @@ export default function App() {
   };
 
   return (
-    <div className="bg-brand-dark min-h-screen text-brand-text flex flex-col justify-between font-sans selection:bg-brand-accent/30 selection:text-brand-highlight">
+    <div className={`bg-brand-dark text-brand-text flex flex-col font-sans selection:bg-brand-accent/30 selection:text-brand-highlight ${inRoom ? "h-dvh overflow-hidden" : "min-h-screen"}`}>
       
       {/* PASSWORD REQUIRED MODAL OVERLAY */}
       {passwordRequiredData && (
@@ -806,7 +861,7 @@ export default function App() {
         />
       ) : (
         /* RENDER VOICE CHAT ROOM */
-        <div className="flex flex-col h-screen max-h-screen overflow-hidden">
+        <div className="flex flex-col h-full w-full overflow-hidden">
           
           {/* Room Header */}
           <header className="bg-brand-panel border-b border-slate-700 py-3.5 px-4 md:px-6 flex flex-wrap gap-4 justify-between items-center z-10 shrink-0">
@@ -833,6 +888,22 @@ export default function App() {
 
             {/* Quick Room Action Triggers */}
             <div className="flex items-center gap-2.5">
+              {/* Participants list trigger (top corner) */}
+              <button
+                onClick={() => setShowParticipantsModal(true)}
+                id="participants-toggle-btn"
+                className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg border border-slate-700 bg-brand-dark hover:bg-brand-panel hover:border-brand-accent transition-all text-xs font-bold text-brand-light cursor-pointer relative"
+                title={language === "en" ? "Participants List" : "অংশগ্রহণকারীদের তালিকা"}
+              >
+                <Users className="w-3.5 h-3.5 text-brand-highlight animate-pulse" />
+                <span>
+                  {language === "en" ? "Participants" : "অংশগ্রহণকারী"}
+                </span>
+                <span className="bg-brand-accent text-brand-dark text-[10px] font-extrabold px-1.5 py-0.5 rounded-full">
+                  {participants.length + 1}
+                </span>
+              </button>
+
               {/* Copy invite link */}
               <button
                 onClick={handleCopyLink}
@@ -873,290 +944,389 @@ export default function App() {
           )}
 
           {/* Main Workspace Panels Layout */}
-          <div className="flex-1 flex flex-col md:flex-row overflow-hidden relative">
+          <div className="flex-1 flex flex-col overflow-hidden relative bg-brand-dark">
             
-            {/* LEFT / CENTER: Active Room Stage (Grid of Users) */}
-            <div className="flex-1 p-4 md:p-6 overflow-y-auto flex flex-col justify-between bg-brand-dark scrollbar-thin">
+            {/* Main Stage & Chat Area (No page scroll, fits together) */}
+            <div className="flex-1 flex flex-col p-2.5 md:p-4 gap-2.5 md:gap-4 overflow-hidden min-h-0">
               
-              {/* Users Stage grid */}
-              <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-4 w-full">
-                {/* Local user card (You) */}
-                <ParticipantCard
-                  participant={{
-                    socketId: "me",
-                    username,
-                    isMuted,
-                    isHandRaised,
-                    isHost,
-                  }}
-                  isMe={true}
-                  isSpeaking={activeSpeakers.has("me")}
-                  isLocalHost={isHost}
-                  currentLanguage={language}
-                  onMutePeer={() => {}}
-                  onKickPeer={() => {}}
-                  onLowerHand={() => {}}
-                />
+              {/* SECTION 1: Seats Grid Room (Live Seats / Rooms) */}
+              <div className="bg-brand-panel/20 border border-slate-800/80 p-2.5 md:p-5 rounded-2xl shadow-inner w-full max-h-[190px] md:max-h-[280px] overflow-y-auto shrink-0 scrollbar-thin">
+                <div className="flex justify-between items-center mb-3">
+                  <span className="text-xs font-bold text-brand-light tracking-wide uppercase flex items-center gap-1.5">
+                    <span className="w-2 h-2 rounded-full bg-brand-highlight animate-pulse"></span>
+                    {language === "en" ? "Live Rooms & Seats" : "লাইভ রুম ও সিট সমূহ"}
+                  </span>
+                  <span className="text-[10px] text-slate-500 font-mono">
+                    {language === "en" ? `${1 + participants.length}/${maxSeats} Seats` : `${1 + participants.length}/${maxSeats}টি সিট`}
+                  </span>
+                </div>
 
-                {/* Other participants */}
-                {participants.map((p) => (
+                {/* Users Stage grid */}
+                <div className="grid grid-cols-5 gap-1.5 md:gap-4 w-full">
+                  {/* Local user card (You) */}
                   <ParticipantCard
-                    key={p.socketId}
-                    participant={p}
-                    isMe={false}
-                    isSpeaking={activeSpeakers.has(p.socketId)}
+                    participant={{
+                      socketId: "me",
+                      username,
+                      isMuted,
+                      isHandRaised,
+                      isHost,
+                      avatarUrl: myAvatarUrl,
+                    }}
+                    isMe={true}
+                    isSpeaking={activeSpeakers.has("me")}
                     isLocalHost={isHost}
                     currentLanguage={language}
-                    onMutePeer={handleHostMutePeer}
-                    onKickPeer={handleHostKickPeer}
-                    onLowerHand={handleHostLowerHand}
+                    onMutePeer={() => {}}
+                    onKickPeer={() => {}}
+                    onLowerHand={() => {}}
+                    onUpdateAvatar={handleUpdateAvatar}
                   />
-                ))}
-              </div>
 
-              {/* If no other users are present, show help screen */}
-              {participants.length === 0 && (
-                <div className="my-auto py-12 flex flex-col items-center justify-center text-center max-w-sm mx-auto animate-fadeIn">
-                  <div className="w-16 h-16 bg-brand-panel rounded-3xl border border-slate-700 flex items-center justify-center text-brand-highlight mb-5 shadow-2xl">
-                    <Sparkles className="w-8 h-8 text-amber-400" />
-                  </div>
-                  <h3 className="text-base font-bold text-white mb-2">
-                    {language === "en" ? "Waiting for others to join..." : "অন্যদের যুক্ত হওয়ার জন্য অপেক্ষা করুন..."}
-                  </h3>
-                  <p className="text-xs text-brand-light leading-relaxed mb-6">
-                    {language === "en"
-                      ? "Share the invite link with your friends to start chatting right away!"
-                      : "আপনার বন্ধুদের সাথে লিঙ্কটি শেয়ার করুন এবং এখনই চ্যাট শুরু করুন!"}
-                  </p>
+                  {/* Other participants */}
+                  {participants.map((p) => (
+                    <ParticipantCard
+                      key={p.socketId}
+                      participant={p}
+                      isMe={false}
+                      isSpeaking={activeSpeakers.has(p.socketId)}
+                      isLocalHost={isHost}
+                      currentLanguage={language}
+                      onMutePeer={handleHostMutePeer}
+                      onKickPeer={handleHostKickPeer}
+                      onLowerHand={handleHostLowerHand}
+                    />
+                  ))}
+
+                  {/* Empty Seats Placeholders */}
+                  {Array.from({ length: Math.max(0, maxSeats - (1 + participants.length)) }).map((_, idx) => (
+                    <div
+                      key={`empty-seat-${idx}`}
+                      className="relative flex flex-col items-center justify-center p-1.5 md:p-5 rounded-xl md:rounded-2xl border border-dashed border-slate-700/60 bg-brand-panel/10 select-none animate-fadeIn"
+                    >
+                      <div className="w-9 h-9 md:w-20 md:h-20 rounded-full border border-dashed border-slate-700/80 flex items-center justify-center text-slate-600 bg-brand-dark/20">
+                        <PlusCircle className="w-4 h-4 md:w-8 h-8 text-slate-600 stroke-[1.5]" />
+                      </div>
+                      <div className="text-center mt-1.5 md:mt-4 w-full">
+                        <p className="text-[9px] md:text-sm font-semibold text-slate-500 leading-tight">
+                          {language === "en" ? "Empty Seat" : "খালি সিট"}
+                        </p>
+                        <p className="text-[7px] md:text-xs text-slate-600 leading-none mt-0.5">
+                          {language === "en" ? "Available" : "ফাঁকা"}
+                        </p>
+                      </div>
+                    </div>
+                  ))}
+                </div>
+
+                {/* Seat management controls */}
+                <div className="flex justify-center mt-3.5 w-full">
                   <button
-                    onClick={handleCopyLink}
-                    className="bg-brand-accent/15 border border-brand-accent/30 text-brand-highlight font-bold px-4 py-2 rounded-xl text-xs hover:bg-brand-accent/25 transition-all flex items-center gap-2 cursor-pointer"
+                    onClick={() => setMaxSeats((prev) => prev + 5)}
+                    className="flex items-center gap-1.5 px-4 py-2 bg-brand-accent/10 border border-dashed border-brand-accent/30 text-brand-highlight hover:bg-brand-accent/20 hover:border-brand-accent text-xs font-bold rounded-xl transition-all cursor-pointer active:scale-95"
+                    title={language === "en" ? "Add 5 Seats" : "+ ৫টি সিট/রুম বাড়ান"}
                   >
-                    <Copy className="w-4 h-4" />
-                    <span>{t.copyLink}</span>
+                    <PlusCircle className="w-3.5 h-3.5" />
+                    <span>{language === "en" ? "Add 5 Seats/Rooms" : "+ ৫টি সিট/রুম বাড়ান"}</span>
                   </button>
                 </div>
-              )}
-            </div>
 
-            {/* RIGHT SIDEBAR: Chat & Participants Panel */}
-            <aside className="w-full md:w-80 border-t md:border-t-0 md:border-l border-slate-700 bg-brand-panel flex flex-col h-64 md:h-full shrink-0 z-10">
-              {/* Sidebar Tabs headers */}
-              <div className="flex bg-brand-dark p-1 border-b border-slate-700 shrink-0">
-                <button
-                  onClick={() => setActiveTab("chat")}
-                  className={`flex-1 flex items-center justify-center gap-1.5 py-2 px-3 text-xs font-bold transition-all cursor-pointer ${
-                    activeTab === "chat"
-                      ? "bg-brand-panel text-brand-highlight rounded-lg shadow-sm"
-                      : "text-brand-light hover:text-brand-highlight"
-                  }`}
-                >
-                  <MessageSquare className="w-3.5 h-3.5" />
-                  <span>{t.chatTab}</span>
-                  {chatMessages.length > 0 && (
-                    <span className="ml-1 bg-brand-accent text-brand-dark text-[10px] font-extrabold px-1.5 py-0.5 rounded-full">
-                      {chatMessages.length}
-                    </span>
-                  )}
-                </button>
-                <button
-                  onClick={() => setActiveTab("participants")}
-                  className={`flex-1 flex items-center justify-center gap-1.5 py-2 px-3 text-xs font-bold transition-all cursor-pointer ${
-                    activeTab === "participants"
-                      ? "bg-brand-panel text-brand-highlight rounded-lg shadow-sm"
-                      : "text-brand-light hover:text-brand-highlight"
-                  }`}
-                >
-                  <Users className="w-3.5 h-3.5" />
-                  <span>{t.participantsTab}</span>
-                  <span className="ml-1 bg-brand-dark text-brand-light text-[10px] font-extrabold px-1.5 py-0.5 rounded-full border border-slate-700">
-                    {participants.length + 1}
-                  </span>
-                </button>
+                {/* If no other users are present, show helper info card inside section */}
+                {participants.length === 0 && (
+                  <div className="mt-4 p-3 bg-brand-highlight/5 border border-brand-highlight/15 rounded-xl flex flex-col sm:flex-row items-center justify-between gap-3 text-center sm:text-left animate-fadeIn">
+                    <div className="flex items-center gap-2.5 justify-center sm:justify-start">
+                      <Sparkles className="w-5 h-5 text-amber-400 shrink-0" />
+                      <div>
+                        <h4 className="text-[11px] font-bold text-white leading-tight">
+                          {language === "en" ? "Waiting for others to join..." : "অন্যদের যুক্ত হওয়ার জন্য অপেক্ষা করুন..."}
+                        </h4>
+                        <p className="text-[9px] text-brand-light/70 mt-0.5 leading-none">
+                          {language === "en" ? "Share the invite link with your friends to start chatting!" : "বন্ধুদের সাথে লিঙ্কটি শেয়ার করে চ্যাট শুরু করুন!"}
+                        </p>
+                      </div>
+                    </div>
+                    <button
+                      onClick={handleCopyLink}
+                      className="bg-brand-accent/15 border border-brand-accent/30 text-brand-highlight font-bold px-3 py-1.5 rounded-lg text-[10px] hover:bg-brand-accent/25 transition-all flex items-center gap-1.5 cursor-pointer"
+                    >
+                      <Copy className="w-3 h-3" />
+                      <span>{t.copyLink}</span>
+                    </button>
+                  </div>
+                )}
               </div>
 
-              {/* Chat Tab Panel Workspace */}
-              {activeTab === "chat" ? (
-                <div className="flex-1 flex flex-col overflow-hidden">
-                  
-                  {/* Messages Stream Container */}
-                  <div className="flex-1 overflow-y-auto p-4 space-y-3.5 scrollbar-thin">
-                    {chatMessages.map((msg) => {
-                      const isSystem = msg.type === "system" || msg.socketId === "system";
-                      const isOwn = msg.socketId === myId;
+              {/* SECTION 2: Live Chat & Comments (Floating transparent design) */}
+              <div className="flex-1 min-h-0 flex flex-col w-full overflow-hidden relative">
+                
+                {/* Chat Stream Header (ambient and subtle, no background) */}
+                <div className="px-1.5 py-2 flex items-center justify-between shrink-0">
+                  <div className="flex items-center gap-1.5">
+                    <MessageSquare className="w-3.5 h-3.5 text-brand-highlight" />
+                    <span className="text-xs font-bold text-white tracking-wide">
+                      {language === "en" ? "Live Chat & Comments" : "লাইভ কমেন্ট সমূহ"}
+                    </span>
+                    {chatMessages.length > 0 && (
+                      <span className="bg-brand-accent/20 border border-brand-accent/40 text-brand-highlight text-[9px] font-extrabold px-1.5 py-0.5 rounded-full">
+                        {chatMessages.length}
+                      </span>
+                    )}
+                  </div>
+                  <span className="text-[9px] text-brand-light/50 font-bold flex items-center gap-1">
+                    <span className="w-1.5 h-1.5 rounded-full bg-brand-highlight animate-pulse"></span>
+                    {language === "en" ? "Real-time" : "রিয়েল-টাইম"}
+                  </span>
+                </div>
 
-                      if (isSystem) {
+                {/* Messages Stream Container (Floating bubbles, auto-scrolling) */}
+                <div className="flex-1 overflow-y-auto px-1 py-1 space-y-2.5 scrollbar-thin">
+                  {chatMessages.map((msg) => {
+                    const isSystem = msg.type === "system" || msg.socketId === "system";
+                    const isOwn = msg.socketId === myId;
+
+                    if (isSystem) {
+                      if (msg.subtype === "welcome") {
+                        const level = (msg.username.length % 5) + 1;
                         return (
-                          <div key={msg.id} className="flex justify-center my-1.5">
-                            <span className="px-3 py-1 bg-brand-dark/90 border border-slate-700/60 rounded-full text-[10px] text-brand-light font-bold text-center leading-relaxed">
-                              📢 {language === "bn" && msg.textBn ? msg.textBn : msg.text}
-                            </span>
+                          <div key={msg.id} className="flex justify-start my-1.5 animate-fadeIn">
+                            <div className="bg-slate-900/60 backdrop-blur-md border border-slate-800/40 rounded-full px-3 py-1 md:py-1.5 flex items-center gap-2 max-w-[95%] shadow-sm">
+                              {/* Level Badge */}
+                              <span className="text-[8px] px-1.5 py-0.5 rounded-full bg-gradient-to-r from-emerald-500 to-teal-400 text-slate-950 font-extrabold tracking-tight shrink-0">
+                                {`LV${level}`}
+                              </span>
+                              
+                              {/* Crown Emote & Username */}
+                              <span className="text-[10px] font-extrabold text-emerald-400 truncate max-w-[120px] flex items-center gap-0.5">
+                                👑 {msg.username}
+                              </span>
+
+                              {/* Welcome text */}
+                              <span className="text-[10px] font-bold text-slate-300">
+                                {language === "bn" ? "রুমে যোগদান করেছে" : "joined the room"}
+                              </span>
+                            </div>
                           </div>
                         );
                       }
 
                       return (
-                        <div key={msg.id} className={`flex flex-col ${isOwn ? "items-end" : "items-start"}`}>
-                          <span className="text-[10px] text-brand-light font-bold mb-0.5 px-1 truncate max-w-[150px]">
-                            {msg.username} {isOwn && `(${t.youTag})`}
-                          </span>
-                          <div
-                            className={`max-w-[85%] rounded-2xl px-3.5 py-2.5 text-xs font-medium leading-relaxed shadow-md ${
-                              isOwn
-                                ? "bg-brand-accent text-brand-dark font-bold rounded-tr-none"
-                                : "bg-brand-dark text-brand-text border border-slate-700 rounded-tl-none"
-                            }`}
-                          >
-                            <p className="break-words font-sans">{msg.text}</p>
+                        <div key={msg.id} className="flex justify-start my-1 animate-fadeIn">
+                          <div className="px-3.5 py-1.5 bg-slate-950/40 border border-slate-900/40 backdrop-blur-sm rounded-full text-[10px] text-brand-light font-bold flex items-center gap-1.5 shadow-sm">
+                            <span className="w-1.5 h-1.5 rounded-full bg-brand-accent animate-pulse"></span>
+                            <span>📢 {language === "bn" && msg.textBn ? msg.textBn : msg.text}</span>
                           </div>
                         </div>
                       );
-                    })}
-                    <div ref={chatEndRef} />
-                  </div>
+                    }
 
-                  {/* Quick Emoji Toolbar Panel */}
-                  <div className="px-3 py-1 bg-brand-dark/50 border-t border-slate-700/80 flex items-center gap-1 overflow-x-auto shrink-0 scrollbar-none">
-                    {["🎤", "👏", "👍", "🔥", "❤️", "😂", "😂❤️", "🇧🇩", "🤝"].map((emoji) => (
-                      <button
-                        key={emoji}
-                        onClick={() => handleQuickEmoji(emoji)}
-                        className="p-1 hover:bg-brand-panel rounded text-sm transition-all focus:outline-none cursor-pointer active:scale-90"
-                      >
-                        {emoji}
-                      </button>
-                    ))}
-                  </div>
+                    // Simple, cute random level generation based on username length to simulate level badge in screenshot
+                    const level = (msg.username.length % 5) + 1;
 
-                  {/* Message Form Input */}
-                  <form onSubmit={handleSendChat} className="p-3 bg-brand-dark border-t border-slate-700/80 flex gap-2 shrink-0">
-                    <input
-                      type="text"
-                      value={chatInput}
-                      onChange={(e) => setChatInput(e.target.value)}
-                      placeholder={t.chatInputPlaceholder}
-                      maxLength={180}
-                      className="flex-1 bg-brand-panel border border-slate-700 focus:outline-none focus:border-brand-highlight text-xs px-3.5 py-2.5 rounded-xl font-medium text-brand-text placeholder:text-brand-light/40"
-                    />
-                    <button
-                      type="submit"
-                      className="p-2.5 bg-brand-accent text-brand-dark rounded-xl hover:bg-brand-highlight active:scale-[0.95] transition-all cursor-pointer flex items-center justify-center shrink-0 shadow"
-                    >
-                      <Send className="w-4 h-4 fill-brand-dark stroke-[2.5]" />
-                    </button>
-                  </form>
+                    return (
+                      <div key={msg.id} className="flex items-start gap-2.5 max-w-[90%] animate-fadeIn">
+                        {/* Tiny sender avatar */}
+                        <div className="w-6 h-6 rounded-full overflow-hidden shrink-0 border border-slate-700/50 bg-slate-900 flex items-center justify-center shadow-sm">
+                          {msg.avatarUrl ? (
+                            <img src={msg.avatarUrl} alt={msg.username} className="w-full h-full object-cover" referrerPolicy="no-referrer" />
+                          ) : (
+                            <span className="text-[9px] font-bold text-brand-light uppercase">{msg.username.substring(0, 2)}</span>
+                          )}
+                        </div>
 
+                        {/* Speech Bubble */}
+                        <div className="bg-slate-950/85 backdrop-blur-md border border-slate-800/60 rounded-2xl rounded-tl-none px-3.5 py-2 shadow-lg flex flex-wrap items-center gap-1.5 transition-all hover:bg-slate-900/95">
+                          {/* Level Badge */}
+                          <span className="text-[8px] px-1 py-0.5 rounded bg-gradient-to-r from-cyan-500 to-brand-accent text-brand-dark font-extrabold tracking-tight shrink-0">
+                            {isOwn ? "ME" : `LV${level}`}
+                          </span>
+
+                          {/* Username */}
+                          <span className="text-[10px] font-bold text-brand-highlight truncate max-w-[120px]">
+                            {msg.username}
+                          </span>
+
+                          {/* Chat Message Text */}
+                          <p className="text-xs text-brand-text font-medium leading-relaxed font-sans break-all select-all">
+                            {msg.text}
+                          </p>
+                        </div>
+                      </div>
+                    );
+                  })}
+                  <div ref={chatEndRef} />
                 </div>
-              ) : (
-                /* Participants Tab Panel Workspace */
-                <div className="flex-1 overflow-y-auto p-4 space-y-3.5 scrollbar-thin">
-                  <div className="space-y-2">
-                    {/* Me User list */}
-                    <div className="flex justify-between items-center bg-brand-dark p-3 rounded-xl border border-slate-700">
+
+                {/* Quick Emoji Toolbar Panel (inline floating directly above input) */}
+                <div className="px-2 py-1.5 bg-slate-900/55 backdrop-blur-sm border-t border-slate-800/60 flex items-center gap-2 overflow-x-auto shrink-0 scrollbar-none w-full">
+                  {["🎤", "👏", "👍", "🔥", "❤️", "😂", "😂❤️", "🇧🇩", "🤝"].map((emoji) => (
+                    <button
+                      key={emoji}
+                      onClick={() => handleQuickEmoji(emoji)}
+                      className="p-1 hover:bg-slate-800 rounded text-sm transition-all focus:outline-none cursor-pointer active:scale-90 shrink-0"
+                    >
+                      {emoji}
+                    </button>
+                  ))}
+                </div>
+              </div>
+
+            </div>
+          </div>
+
+          {/* Participants Modal Popup */}
+          {showParticipantsModal && (
+            <div className="fixed inset-0 bg-slate-950/85 backdrop-blur-sm flex items-center justify-center p-4 z-50 animate-fadeIn">
+              <div className="bg-brand-panel border border-slate-700 w-full max-w-sm rounded-2xl shadow-2xl overflow-hidden animate-slideUp">
+                {/* Modal Header */}
+                <div className="px-5 py-4 border-b border-slate-700 flex justify-between items-center bg-brand-dark/50">
+                  <div className="flex items-center gap-2">
+                    <Users className="w-4 h-4 text-brand-highlight" />
+                    <h3 className="text-sm font-bold text-white">
+                      {language === "en" ? "Active Participants" : "সক্রিয় অংশগ্রহণকারী"}
+                    </h3>
+                    <span className="bg-brand-accent/20 border border-brand-accent/30 text-brand-highlight text-[10px] font-extrabold px-1.5 py-0.5 rounded-full">
+                      {participants.length + 1}
+                    </span>
+                  </div>
+                  <button
+                    onClick={() => setShowParticipantsModal(false)}
+                    className="text-slate-400 hover:text-white transition-all cursor-pointer p-1 rounded-lg hover:bg-slate-800"
+                  >
+                    <X className="w-4 h-4" />
+                  </button>
+                </div>
+
+                {/* Modal Content */}
+                <div className="p-4 max-h-[300px] overflow-y-auto space-y-2.5 scrollbar-thin bg-brand-dark/20">
+                  {/* Local User (Me) */}
+                  <div className="flex justify-between items-center bg-brand-dark/60 p-3 rounded-xl border border-slate-700/60">
+                    <div className="flex items-center gap-2.5 overflow-hidden">
+                      <div className="w-8 h-8 rounded-full bg-brand-accent flex items-center justify-center text-xs font-extrabold text-brand-dark shadow-inner">
+                        ME
+                      </div>
+                      <span className="text-xs font-bold text-brand-text truncate pr-2">
+                        {username} <span className="text-[10px] text-brand-light font-normal">({t.youTag})</span>
+                      </span>
+                    </div>
+                    <div className="flex items-center gap-1.5 shrink-0">
+                      {isHost && <Crown className="w-3.5 h-3.5 text-amber-400 fill-amber-400 animate-pulse" title={t.hostTag} />}
+                      {isMuted ? <MicOff className="w-3.5 h-3.5 text-rose-500" /> : <Mic className="w-3.5 h-3.5 text-brand-highlight animate-pulse" />}
+                      {isHandRaised && <Hand className="w-3.5 h-3.5 text-amber-400 fill-amber-400" />}
+                    </div>
+                  </div>
+
+                  {/* Other Active Users */}
+                  {participants.map((p) => (
+                    <div key={p.socketId} className="flex justify-between items-center bg-brand-dark/60 p-3 rounded-xl border border-slate-700/60">
                       <div className="flex items-center gap-2.5 overflow-hidden">
-                        <div className="w-7 h-7 rounded-full bg-brand-accent flex items-center justify-center text-[10px] font-extrabold text-brand-dark">
-                          ME
+                        <div className="w-8 h-8 rounded-full bg-slate-800 border border-slate-700 flex items-center justify-center text-xs font-bold text-brand-light uppercase shadow-inner">
+                          {p.username.substring(0, 2)}
                         </div>
                         <span className="text-xs font-bold text-brand-text truncate pr-2">
-                          {username} <span className="text-[10px] text-brand-light font-normal">({t.youTag})</span>
+                          {p.username}
                         </span>
                       </div>
                       <div className="flex items-center gap-1.5 shrink-0">
-                        {isHost && <Crown className="w-3.5 h-3.5 text-amber-400 fill-amber-400" />}
-                        {isMuted ? <MicOff className="w-3.5 h-3.5 text-rose-500" /> : <Mic className="w-3.5 h-3.5 text-brand-highlight" />}
-                        {isHandRaised && <Hand className="w-3.5 h-3.5 text-amber-400 fill-amber-400" />}
+                        {p.isHost && <Crown className="w-3.5 h-3.5 text-amber-400 fill-amber-400 animate-pulse" title={t.hostTag} />}
+                        {p.isMuted ? <MicOff className="w-3.5 h-3.5 text-rose-500" /> : <Mic className="w-3.5 h-3.5 text-brand-highlight" />}
+                        {p.isHandRaised && <Hand className="w-3.5 h-3.5 text-amber-400 fill-amber-400" />}
                       </div>
                     </div>
-
-                    {/* Peer User list */}
-                    {participants.map((p) => (
-                      <div key={p.socketId} className="flex justify-between items-center bg-brand-dark p-3 rounded-xl border border-slate-700">
-                        <div className="flex items-center gap-2.5 overflow-hidden">
-                          <div className="w-7 h-7 rounded-full bg-brand-panel border border-slate-700 flex items-center justify-center text-[10px] font-extrabold text-brand-light uppercase">
-                            {p.username.substring(0, 2)}
-                          </div>
-                          <span className="text-xs font-bold text-brand-text truncate pr-2">
-                            {p.username}
-                          </span>
-                        </div>
-                        <div className="flex items-center gap-1.5 shrink-0">
-                          {p.isHost && <Crown className="w-3.5 h-3.5 text-amber-400 fill-amber-400" />}
-                          {p.isMuted ? <MicOff className="w-3.5 h-3.5 text-rose-500" /> : <Mic className="w-3.5 h-3.5 text-brand-highlight" />}
-                          {p.isHandRaised && <Hand className="w-3.5 h-3.5 text-amber-400 fill-amber-400" />}
-                        </div>
-                      </div>
-                    ))}
-                  </div>
+                  ))}
                 </div>
-              )}
-            </aside>
-          </div>
+
+                {/* Close Button Footer */}
+                <div className="px-4 py-3 bg-brand-dark/30 border-t border-slate-700/60 flex justify-end">
+                  <button
+                    onClick={() => setShowParticipantsModal(false)}
+                    className="px-4 py-1.5 bg-slate-800 hover:bg-slate-700 text-brand-light font-bold text-xs rounded-xl transition-all cursor-pointer"
+                  >
+                    {language === "en" ? "Close" : "বন্ধ করুন"}
+                  </button>
+                </div>
+              </div>
+            </div>
+          )}
 
           {/* Bottom Call Controllers Bar */}
-          <footer className="bg-brand-panel border-t border-slate-700 px-4 py-4 md:py-5 flex items-center justify-between z-10 shrink-0">
-            {/* Left speaker indicator status label */}
-            <div className="hidden sm:flex items-center gap-2">
-              <div className="w-2.5 h-2.5 rounded-full bg-brand-highlight animate-pulse"></div>
-              <span className="text-xs text-brand-light font-bold font-sans">
-                {t.connected}
-              </span>
-            </div>
+          <footer className="bg-brand-panel border-t border-slate-800 px-3 md:px-6 py-3.5 flex items-center gap-3.5 z-10 shrink-0 w-full justify-between">
+            {/* Left: Input Comment field (Pill styled like "কিছু লিখুন...") */}
+            <form onSubmit={handleSendChat} className="flex-1 max-w-[280px] sm:max-w-md flex items-center relative group">
+              <input
+                type="text"
+                value={chatInput}
+                onChange={(e) => setChatInput(e.target.value)}
+                placeholder={language === "bn" ? "কিছু লিখুন..." : "Write a comment..."}
+                maxLength={180}
+                className="w-full bg-slate-900/90 border border-slate-700/60 focus:border-brand-highlight focus:outline-none text-xs px-4 py-2.5 rounded-full pr-10 font-medium text-brand-text placeholder:text-brand-light/40 shadow-inner transition-all"
+              />
+              <button
+                type="submit"
+                disabled={!chatInput.trim()}
+                className={`absolute right-1.5 p-1.5 rounded-full flex items-center justify-center transition-all cursor-pointer ${
+                  chatInput.trim() 
+                    ? "bg-brand-accent text-brand-dark hover:bg-brand-highlight scale-100" 
+                    : "bg-transparent text-slate-500 scale-90 opacity-40 cursor-not-allowed"
+                }`}
+              >
+                <Send className="w-3.5 h-3.5 stroke-[2.5]" />
+              </button>
+            </form>
 
-            {/* Middle major control call buttons */}
-            <div className="flex items-center gap-3.5 mx-auto sm:mx-0">
+            {/* Right/Middle: Actions (Mic, Hand, Record, Leave) styled as beautiful circle buttons */}
+            <div className="flex items-center gap-2 md:gap-3 shrink-0">
               {/* Mic Toggler */}
               <button
                 onClick={handleToggleMute}
                 id="toggle-mic-btn"
-                className={`p-3.5 rounded-2xl border transition-all cursor-pointer flex items-center justify-center active:scale-95 shadow-md ${
+                className={`w-9 h-9 md:w-11 md:h-11 rounded-full border transition-all cursor-pointer flex items-center justify-center active:scale-90 shadow-md ${
                   isMuted
-                    ? "bg-rose-600/15 border-rose-600/40 text-rose-400 hover:bg-rose-600/25"
-                    : "bg-brand-dark border-slate-700 text-brand-light hover:bg-brand-panel hover:border-brand-accent"
+                    ? "bg-rose-600/20 border-rose-600/40 text-rose-400 hover:bg-rose-600/35"
+                    : "bg-slate-900/80 border-slate-700/50 text-brand-light hover:bg-brand-panel hover:border-brand-accent"
                 }`}
                 title={isMuted ? t.unmuteMic : t.muteMic}
               >
-                {isMuted ? <MicOff className="w-5.5 h-5.5" /> : <Mic className="w-5.5 h-5.5" />}
+                {isMuted ? <MicOff className="w-4.5 h-4.5 md:w-5 h-5" /> : <Mic className="w-4.5 h-4.5 md:w-5 h-5" />}
               </button>
 
               {/* Hand Toggler */}
               <button
                 onClick={handleToggleHand}
                 id="toggle-hand-btn"
-                className={`p-3.5 rounded-2xl border transition-all cursor-pointer flex items-center justify-center active:scale-95 shadow-md ${
+                className={`w-9 h-9 md:w-11 md:h-11 rounded-full border transition-all cursor-pointer flex items-center justify-center active:scale-90 shadow-md ${
                   isHandRaised
-                    ? "bg-amber-500/15 border-amber-500/40 text-amber-400 hover:bg-amber-500/25"
-                    : "bg-brand-dark border-slate-700 text-brand-light hover:bg-brand-panel hover:border-brand-accent"
+                    ? "bg-amber-500/25 border-amber-500/40 text-amber-400 hover:bg-amber-500/35"
+                    : "bg-slate-900/80 border-slate-700/50 text-brand-light hover:bg-brand-panel hover:border-brand-accent"
                 }`}
                 title={isHandRaised ? t.lowerHand : t.raiseHand}
               >
-                <Hand className={`w-5.5 h-5.5 ${isHandRaised ? "fill-amber-400" : ""}`} />
+                <Hand className={`w-4.5 h-4.5 md:w-5 h-5 ${isHandRaised ? "fill-amber-400" : ""}`} />
               </button>
 
               {/* Mixed Session Audio Recording Button */}
               <button
                 onClick={handleToggleRecording}
                 id="toggle-record-btn"
-                className={`p-3.5 rounded-2xl border transition-all cursor-pointer flex items-center justify-center active:scale-95 shadow-md ${
+                className={`w-9 h-9 md:w-11 md:h-11 rounded-full border transition-all cursor-pointer flex items-center justify-center active:scale-90 shadow-md ${
                   isRecording
-                    ? "bg-red-600/20 border-red-500 text-red-500 animate-pulse hover:bg-red-600/35"
-                    : "bg-brand-dark border-slate-700 text-brand-light hover:bg-brand-panel hover:border-brand-accent"
+                    ? "bg-red-600/25 border-red-500 text-red-500 animate-pulse hover:bg-red-600/40"
+                    : "bg-slate-900/80 border-slate-700/50 text-brand-light hover:bg-brand-panel hover:border-brand-accent"
                 }`}
                 title={isRecording ? t.stopRecording : t.startRecording}
               >
-                <Disc className={`w-5.5 h-5.5 ${isRecording ? "animate-spin" : ""}`} />
+                <Disc className={`w-4.5 h-4.5 md:w-5 h-5 ${isRecording ? "animate-spin" : ""}`} />
+              </button>
+
+              {/* Leave Room Trigger */}
+              <button
+                onClick={handleLeaveRoom}
+                id="leave-room-btn"
+                className="w-9 h-9 md:w-11 md:h-11 rounded-full bg-rose-600 text-white flex items-center justify-center shadow-[0_0_15px_rgba(220,38,38,0.25)] hover:bg-rose-500 cursor-pointer active:scale-90 transition-all"
+                title={t.leaveBtn}
+              >
+                <LogOut className="w-4 h-4 md:w-4.5 md:h-4.5 rotate-180" />
               </button>
             </div>
-
-            {/* Right Hangup trigger button */}
-            <button
-              onClick={handleLeaveRoom}
-              id="leave-room-btn"
-              className="bg-red-600 text-white font-extrabold px-4 md:px-5 py-3 rounded-2xl flex items-center justify-center gap-1.5 shadow-[0_0_15px_rgba(220,38,38,0.25)] hover:bg-red-500 cursor-pointer active:scale-95 transition-all text-xs"
-              title={t.leaveBtn}
-            >
-              <LogOut className="w-4 h-4 rotate-180" />
-              <span className="hidden sm:inline">{t.leaveBtn}</span>
-            </button>
           </footer>
 
         </div>

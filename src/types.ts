@@ -4,6 +4,7 @@ export interface Participant {
   isMuted: boolean;
   isHandRaised: boolean;
   isHost: boolean;
+  avatarUrl?: string;
 }
 
 export interface ChatMessage {
@@ -14,6 +15,8 @@ export interface ChatMessage {
   textBn?: string;
   timestamp: number;
   type: "user" | "system";
+  avatarUrl?: string;
+  subtype?: "welcome" | "general";
 }
 
 export type Language = "en" | "bn";
