@@ -1,0 +1,6 @@
+{
+  "name": "Voice Group Chat",
+  "description": "A production-ready voice group chat web application using WebRTC, Socket.IO, and Express with bilingual support, host controls, and live chat.",
+  "requestFramePermissions": ["microphone"],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
